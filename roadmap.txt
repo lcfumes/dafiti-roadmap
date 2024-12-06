@@ -1,0 +1,104 @@
+Pontos técnicos
+Resumo
+Os projetos BOB e ALICE de SSC estão sendo executados em máquinas compartilhadas, impossibilitando algumas configurações básicas como escalonamento automático baseado em métricas, divisão de responsabilidades por contexto, monitoria das aplicações impactadas por eventos misturados no APM (instana). Processos de deploy e pipelines estão complexos, utilizando ferramentas que dificultam a utilização das funcionalidades nativas da AWS disponíveis com o CodeDeploy, como deploy utilizando estratégias de blue/green.
+Será necessário fazer alguns ajustes no código de ambas as aplicações para que seja flexibilizada a migração de forma mais organizada, padronizando nossos processos de CI/CD e aplicando os padrões estabelecidos pelo time de plataforma.
+Nos próximos tópicos será descrito alguns pontos chaves que farão parte das adequações das aplicações.
+Arquitetura
+O resultado final esperado será:
+Separar as aplicações Alice BOB em deployments separados
+Migração dos repositórios Alice BOB e suas dependências privadas do gitlab para o github. Na incidência de nomes iguais, os repositórios devem utilizar o sulfixo -ssc
+Ambas aplicações deveram conter em seus respectivos repositórios a configuração para execução stand-alone utilizando Docker e docker-compose seguindo os padrões estabelecidos nessa documentação: https://dafiti.jira.com/wiki/spaces/PLAT/pages/3355279393/Padr+es+de+Dockerfile+e+docker-compose.yml 
+A infraestrutura da aplicação Alice deverá ser executada utilizando CodeDeploy com Autoscaling Group e Blue/green deployment. Link da documentação original AWS
+A infraestrutura da aplicação BOB deverá ter:
+ 1 CodeDeploy app com 2 Deployment Groups, sendo um sem autoscaling group para executar as interfaces de Cronjobs e  Workers e outro com Autoscaling group com Blue/green deployment.
+Aplicar as configurações de nginx/php-fpm/hardening sugeridos nessa documentação https://dafiti.jira.com/wiki/spaces/PLAT/pages/3094085648/Fine+tunning+servidores+nginx+php-fpm 
+Compartilhamento do estado de sessão utilizando redis.
+Abaixo uma imagem que explica o desenvolvimento:
+
+
+
+
+
+Para a configuração das regras gerais de branch-strategy, github rules and permissions, Circle CI setup, o time de DevXP irá dar o suporte para integrar com os padrões já estabelecidos utilizando nossas automações.
+
+Premissa de comportamento das novas instancias EC2
+A máquina/instancia EC2 deve ter apenas configurações mínimas de php, php-fpm, nginx, hardening, etc, todo ou qualquer ajuste feito na máquina que seja para um comportamento exclusivo da aplicação deve ser gerenciado no código da aplicação. Exemplo:
+Criar crontab para limpeza de disco:
+Isso deve ser gerenciado pela própria aplicação, em não deixar sugeiras na máquina.
+Criar regras específicas no nginx para controle de acessos, proxy reversos, e afins
+Toda regra de negócio deve ser gerenciada pena CDN (Azion). O arquivo de configuração do NGINX deve ser o mais agnóstico possível.
+Criar alias no /etc/hosts para deixar agnostico os nomes de integrações
+Isso deve ser evitado a todo custo, toda e qualquer configuração de integração deve ser gerenciado pelos arquivos de configuração da prórpria aplicação
+Utilizar o nome do DNS auto gerado como endpoint na aplicação
+Todos os recursos como REDIS, RDS, RABBITMQ, etc devem ter DNS exclusivos para que seja possível gerenciar o recurso que está provisionado para aplicação de forma transparente para a aplicação. Exemplo
+RDS -> mydbinstance.cg034hpkmmjt.us-east-1.rds.amazonaws.com
+DNS -> bob-ssc-db.co.qa.dafiti.local (dns para ser configurado na aplicação)
+
+Workers ou consumers
+As máquinas estão com os arquivos de configuração do supervisord configurados diretamente nas instancias, precisando fazer um inventário e criar as devidas referências no repositório puppet (https://github.com/dafiti-group/puppet ) para serem gerenciados de forma automática e centralizada.
+Nesse repositório, deverá ser criado dois perfis de configuração para o projeto, as configurações de maquinas no-asg (no auto scaling group) e asg(autoscaling group). Mais detalhes no tópico Configurações de máquinas EC2
+Persistência de arquivos em disco
+Contextos de upload de imagens de cms e pet estão sendo persistidas em disco e entregues para o cliente final utilizando um disco compartilhado de aproximadamente 4TB que está vinculado com duas máquinas servindo de file server.
+Será necessário fazer a migração dos dados/imagens para um bucket (S3) e configurar uma nova edge application (AZION) para entregar o conteúdo de arquivos estáticos.
+Nessa fase, será necessário ajustar o código da aplicação para que ela esteja adequada para realizar uploads para esse S3 e visualizar os itens do S3 internamente.
+Outros fluxos de export de dados que geram links para download de arquivos, também precisaram ser ajustados para utilizar o S3 para armazenar o arquivo, e gerar o link para download.
+Essa etapa é necessária para viabilizar o uso do autoscaling group deixando as instancias da aplicação agnósticas ao seu propósito.
+IAC(infra as code)
+Recursos na AWS
+Todo recurso referente a cloud utiliza TERRAGRUNT, modulos do terraform internalizados, e ATLANTIS RUN como padrão. O repositório que a infraestrutura deverá ser provisionada é https://github.com/dafiti-group/dafiti-platform. Esse repositório tem um padrão estabelecido para organizar a criação dos recursos disponíveis no README.md do projeto.
+Para criar novos recursos, deve-se criar uma nova branch a partir da branch main com a inclusão de 1 recurso por PR. Para que esse novo recurso seja provisionado, é necessário criar uma PR da branch criada para a branch main, onde deverá contar com uma revisão de um integrante dos times de DevXP ou SRE para ser aprovado. Para aplicação da alteração será necessário apenas comentar na PR atlantis apply e toda automação se responsabilizará pelo provisionamento.
+Configurações de máquinas EC2
+Nosso padrão estabelecido utiliza a ferramenta PUPPET para gerenciar instalação e configuração como:
+Log rotate
+Logger preparado para stdout
+Supervisorctl instalations and supervisor programs.conf files
+System hardening (file system, somaxconn, etc)
+APM agent configuration
+nginx install/setup
+php + php-fpm + opcache + finetuning 
+O fluxo de delivery desse repositório segue da seguinte forma:
+Criar uma nova branch a partir da branch development
+Criar as configurações adequadas para o contexto
+Abrir PR da branch feature -> development
+Necessário a revisão de 1 SRE
+Abrir PR da branch development -> staging
+Necessário revisão de 1 SRE-Runit
+Abrir PR da branch staging -> production
+Necessário aprovação de 1 SRE-Runit
+
+
+WAYS OF WORKING
+Cerimônias
+
+Vamos seguir algumas cerimônias do scrum para garantir que trabalhemos juntos e que todas expectativas sejam atendidas. Entendemos também que as cerimônias abaixo vão trazer mais agilidade e assertividade pro projeto.
+
+Planning
+Quem participa - devs ou representantes, Especialista Dafiti Engenharia, Especialista Dafiti Infraestrutura e gestores (quando necessário)
+Objetivo - Planejamento detalhado das tarefas da próxima quinzena.
+Quando acontece - A cada 15 dias (sempre no dia posterior a review para planejamento da próx quinzena)
+Duração - 1h
+Daily 
+Quem participa - devs ou representantes, Especialista Dafiti Engenharia, Especialista Dafiti Infraestrutura e gestores (quando necessário)
+Objetivo - alinhamento técnico pontual e acompanhamento
+Quando acontece - diariamente
+Duração - 15min
+Review
+Quem participa - todos stakeholders (devs, espec e gestores)
+Objetivo - Mostrar o trabalho realizado na última quinzena
+Quando acontece - A cada 15 dias
+Duração - 1h
+
+
+
+
+
+
+
+
+
+
+ADICIONAL / OPCIONAL:
+
+Ambas aplicações deveram ter a inclusão da configuração do Devspace disponível nessa documentação: https://dafiti.jira.com/wiki/spaces/PLAT/pages/4335108100/Configurando+sua+APP+no+Devspace 
+
+
